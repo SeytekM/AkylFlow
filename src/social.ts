@@ -38,7 +38,8 @@ async function rest<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers: {
       apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
+      // новые ключи sb_publishable_ не являются JWT — их передаём только в apikey
+      ...(SUPABASE_KEY.startsWith('eyJ') ? { Authorization: `Bearer ${SUPABASE_KEY}` } : {}),
       'Content-Type': 'application/json',
       ...(init.headers ?? {}),
     },
