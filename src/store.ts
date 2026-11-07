@@ -50,6 +50,10 @@ export type State = {
   completed: string[]
   friends: Friend[]
   lastSeenDay: string
+  reviews: number // сколько раз помог сокурсникам (ревью)
+  perfect: number // уроков без единой ошибки
+  chestDay: string | null // день, когда открыт сундук
+  sound: boolean
 }
 
 export const FREEZE_PRICE = 50
@@ -88,6 +92,10 @@ const freshState = (): State => ({
   // с сервером — только реальные друзья; без сервера — демо-друзья
   friends: HAS_BACKEND ? [] : demoFriends(),
   lastSeenDay: dayKey(),
+  reviews: 0,
+  perfect: 0,
+  chestDay: null,
+  sound: true,
 })
 
 /* ---------- симуляция активности друзей (детерминированно по дню) ---------- */
@@ -163,11 +171,13 @@ export type LessonResult = {
   friendsExtended: string[] // имена друзей, с кем продлили огонёк
 }
 
-export function completeLesson(s: State, lessonId: string, xpGained: number, now = new Date()): [State, LessonResult] {
+export function completeLesson(s: State, lessonId: string, xpGained: number, perfect = false, now = new Date()): [State, LessonResult] {
   const today = dayKey(now)
   const already = s.activeDays.includes(today)
   let next: State = {
     ...s,
+    reviews: s.reviews + 1,
+    perfect: s.perfect + (perfect ? 1 : 0),
     xp: s.xp + xpGained,
     xpByDay: { ...s.xpByDay, [today]: (s.xpByDay[today] ?? 0) + xpGained },
     completed: s.completed.includes(lessonId) ? s.completed : [...s.completed, lessonId],
@@ -205,7 +215,7 @@ export function demoState(name: string, track: TrackId): State {
   return {
     ...s,
     name, track, onboarded: true,
-    xp: 1280, coins: 140, freezes: 2,
+    xp: 1280, coins: 140, freezes: 2, reviews: 9, perfect: 4,
     activeDays: active, frozenDays: frozen, xpByDay,
     streak: 13, longest: 21, lastActive: addDays(today, -1),
     completed: [],
@@ -267,4 +277,36 @@ export const fmtDuration = (ms: number) => {
   const h = Math.floor(ms / 3600000)
   const m = Math.floor((ms % 3600000) / 60000)
   return h > 0 ? `${h} ч ${m} мин` : `${m} мин`
+}
+
+/* ---------- сундук дня: переменная награда после выполнения цели ---------- */
+export type ChestReward = { kind: 'coins'; amount: number } | { kind: 'freeze' }
+export function openChest(s: State, rnd = Math.random()): [State, ChestReward] {
+  const today = dayKey()
+  let reward: ChestReward
+  if (rnd < 0.12 && s.freezes < MAX_FREEZES) reward = { kind: 'freeze' }
+  else if (rnd < 0.35) reward = { kind: 'coins', amount: 40 + Math.floor(rnd * 60) }
+  else reward = { kind: 'coins', amount: 10 + Math.floor(rnd * 50) }
+  const next = reward.kind === 'freeze'
+    ? { ...s, freezes: s.freezes + 1, chestDay: today }
+    : { ...s, coins: s.coins + reward.amount, chestDay: today }
+  return [next, reward]
+}
+
+/* ---------- достижения ---------- */
+export type Achievement = { id: string; emoji: string; title: string; desc: string; progress: number; goal: number }
+export function achievements(s: State, realFriendsMax = 0): Achievement[] {
+  const friendMax = Math.max(realFriendsMax, ...s.friends.map((f) => f.sharedStreak), 0)
+  return [
+    { id: 'first', emoji: '🌱', title: 'Первый шаг', desc: 'Пройди первый урок', progress: s.activeDays.length, goal: 1 },
+    { id: 's3', emoji: '🔥', title: 'Разгорается', desc: 'Серия 3 дня', progress: s.longest, goal: 3 },
+    { id: 's7', emoji: '⚡', title: 'Неделя огня', desc: 'Серия 7 дней', progress: s.longest, goal: 7 },
+    { id: 's30', emoji: '🌋', title: 'Месяц пламени', desc: 'Серия 30 дней', progress: s.longest, goal: 30 },
+    { id: 'perfect', emoji: '🎯', title: 'Снайпер', desc: '3 урока без ошибок', progress: s.perfect, goal: 3 },
+    { id: 'helper', emoji: '🤝', title: 'Помощник когорты', desc: 'Оцени 10 ответов', progress: s.reviews, goal: 10 },
+    { id: 'friend', emoji: '👯', title: 'Не один', desc: 'Огонёк с другом', progress: friendMax, goal: 1 },
+    { id: 'bff', emoji: '💞', title: 'Лучшие друзья', desc: 'Общий огонёк 7 дней', progress: friendMax, goal: 7 },
+    { id: 'xp', emoji: '🧠', title: 'Знаток', desc: 'Набери 1000 XP', progress: s.xp, goal: 1000 },
+    { id: 'ice', emoji: '🧊', title: 'Ледяная защита', desc: 'Заморозка спасла серию', progress: s.frozenDays.length, goal: 1 },
+  ]
 }
