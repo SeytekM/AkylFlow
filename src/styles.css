@@ -204,3 +204,23 @@ h1, h2, h3 { margin: 0; }
 .friend-ext { width: 100%; background: rgba(255,138,0,.12); border: 1px solid var(--fire); border-radius: 14px; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
 
 .toast { position: fixed; bottom: 86px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 14px; font-weight: 600; z-index: 30; width: max-content; max-width: calc(100% - 32px); animation: fade .2s; }
+
+/* реальные друзья */
+.invite { display: flex; flex-direction: column; gap: 8px; border-color: var(--accent); }
+.invite p { margin: 0; }
+.link-row { display: flex; gap: 6px; align-items: center; }
+.link-row .btn { margin: 0; }
+.link-input { padding: 10px; font-size: 12px; min-width: 0; flex: 1; }
+.invite-hint { background: rgba(99,102,241,.15); border: 1px solid var(--accent); border-radius: 14px; padding: 10px 12px; margin: 0; }
+.nudge-banner { display: flex; gap: 12px; align-items: center; border-color: var(--fire); background: rgba(255,138,0,.1); }
+.nudge-banner p { margin: 2px 0 0; }
+.label-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+.label-row .label { margin: 0; }
+.seg { display: flex; background: var(--card2); border-radius: 10px; padding: 2px; }
+.seg button { padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.seg button.on { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.row.lb { align-items: flex-start; }
+.lb-top { display: flex; justify-content: space-between; gap: 8px; }
+.lb-bar { height: 6px; border-radius: 6px; background: var(--card2); margin: 4px 0; overflow: hidden; }
+.lb-bar div { height: 100%; background: linear-gradient(90deg, var(--fire), #ffb347); border-radius: 6px; transition: width .4s; }
+.f-ava.letter { font-size: 22px; font-weight: 800; background: linear-gradient(135deg, #6366f1, #a855f7); color: #fff; }

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { TRACKS, type Lesson, type TrackId } from './content'
 import LessonView from './Lesson'
+import { HAS_BACKEND } from './config'
+import { capturePendingRef, hasPendingRef, inviteUrl, sharedStreak, useSocial, xpOn, xpWeek, type Profile, type Social } from './social'
 import {
   FREEZE_PRICE, FRIEND_RESTORE_PRICE, MAX_FREEZES, REPAIR_PRICE,
   addDays, completeLesson, dayKey, demoState, flameTier, fmtDuration, friendActiveOn,
@@ -15,6 +17,7 @@ declare global {
     Telegram?: { WebApp?: { ready: () => void; expand: () => void; initDataUnsafe?: { user?: { first_name?: string } }; openTelegramLink: (u: string) => void; HapticFeedback?: { notificationOccurred: (t: string) => void } } }
   }
 }
+capturePendingRef()
 const tg = window.Telegram?.WebApp
 const haptic = () => tg?.HapticFeedback?.notificationOccurred('success')
 
@@ -33,22 +36,19 @@ export default function App() {
   const [lesson, setLesson] = useState<Lesson | null>(null)
   const [celebrate, setCelebrate] = useState<LessonResult | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [realExt, setRealExt] = useState<{ name: string; streak: number }[]>([])
+  const social = useSocial(state)
+  useEffect(() => {
+    if (social.newFriend) {
+      setToast(`🤝 Вы теперь друзья с ${social.newFriend}!`)
+      social.clearNewFriend()
+    }
+  }, [social.newFriend]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     tg?.ready()
     tg?.expand()
   }, [])
-  // реферальная ссылка ?ref=Имя: пригласивший сразу появляется в друзьях
-  useEffect(() => {
-    const ref = new URLSearchParams(location.search).get('ref')
-    if (ref && !state.friends.some((f) => f.name === ref)) {
-      update((s) => ({
-        ...s,
-        friends: [...s.friends, { id: 'ref-' + ref, name: ref, avatar: '🤝', reliability: 80, activeHour: 9, sharedStreak: 0, lastBoth: null, lostStreak: 0, nudgedDay: null }],
-      }))
-      history.replaceState(null, '', location.pathname)
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 2600)
@@ -60,6 +60,11 @@ export default function App() {
   const finishLesson = (l: Lesson, xp: number, coins: number) => {
     const [next, result] = completeLesson({ ...state, coins: state.coins + coins }, l.id, xp)
     update(() => next)
+    // реальные друзья: если друг уже занимался сегодня, общий огонёк продлевается моим первым уроком
+    const today = dayKey()
+    setRealExt(result.streakExtended
+      ? social.friends.filter((f) => f.active_days.includes(today)).map((f) => ({ name: f.name, streak: sharedStreak(next.activeDays, f.active_days).streak }))
+      : [])
     setLesson(null)
     setCelebrate(result)
     haptic()
@@ -82,8 +87,8 @@ export default function App() {
 
   return (
     <div className="app">
-      {tab === 'home' && <Home state={state} track={track} openLesson={setLesson} goFriends={() => setTab('friends')} update={update} toast={setToast} />}
-      {tab === 'friends' && <Friends state={state} update={update} toast={setToast} />}
+      {tab === 'home' && <Home state={state} social={social} track={track} openLesson={setLesson} goFriends={() => setTab('friends')} update={update} toast={setToast} />}
+      {tab === 'friends' && <Friends state={state} social={social} update={update} toast={setToast} />}
       {tab === 'cohort' && <Cohort state={state} />}
       {tab === 'profile' && <Profile state={state} update={update} reset={reset} toast={setToast} />}
 
@@ -97,13 +102,13 @@ export default function App() {
           <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
             <span>{ic}</span>
             {label}
-            {id === 'friends' && state.friends.some((f) => f.sharedStreak > 0 && f.lastBoth !== dayKey()) && <i className="dot" />}
+            {id === 'friends' && (state.friends.some((f) => f.sharedStreak > 0 && f.lastBoth !== dayKey()) || (social.nudges.length > 0 && !userActiveOn(state, dayKey()))) && <i className="dot" />}
           </button>
         ))}
       </nav>
 
       {lesson && <LessonView lesson={lesson} onClose={() => setLesson(null)} onDone={(xp, c) => finishLesson(lesson, xp, c)} />}
-      {celebrate && <Celebration result={celebrate} state={state} onClose={() => setCelebrate(null)} />}
+      {celebrate && <Celebration result={celebrate} realExt={realExt} state={state} onClose={() => setCelebrate(null)} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   )
@@ -117,6 +122,7 @@ function Onboarding({ onStart }: { onStart: (name: string, t: TrackId, demo: boo
     <div className="onboarding">
       <div className="big-flame tier-fire">🔥</div>
       <h1>AkylFlow</h1>
+      {hasPendingRef() && <p className="invite-hint">🤝 Тебя пригласил друг! После онбординга вы станете друзьями и будете видеть прогресс друг друга.</p>}
       <p className="muted">Микро-уроки по 5 минут, ИИ-тьютор и огонёк с друзьями. Учись каждый день и не дай огоньку погаснуть.</p>
       <input className="input" placeholder="Как тебя зовут?" value={name} onChange={(e) => setName(e.target.value)} />
       <p className="label">Твоя цель</p>
@@ -139,8 +145,8 @@ function Onboarding({ onStart }: { onStart: (name: string, t: TrackId, demo: boo
 }
 
 /* ================= Главная: личный огонёк (Duolingo) ================= */
-function Home({ state, track, openLesson, goFriends, update, toast }: {
-  state: State; track: (typeof TRACKS)[number]; openLesson: (l: Lesson) => void; goFriends: () => void
+function Home({ state, social, track, openLesson, goFriends, update, toast }: {
+  state: State; social: Social; track: (typeof TRACKS)[number]; openLesson: (l: Lesson) => void; goFriends: () => void
   update: (fn: (s: State) => State) => void; toast: (t: string) => void
 }) {
   const now = useNow(30_000)
@@ -149,7 +155,12 @@ function Home({ state, track, openLesson, goFriends, update, toast }: {
   const xpToday = state.xpByDay[today] ?? 0
   const goalPct = Math.min(1, xpToday / state.dailyGoal)
   const nextLesson = track.lessons.find((l) => !state.completed.includes(l.id)) ?? track.lessons[(state.completed.length) % track.lessons.length]
-  const atRisk = state.friends.filter((f) => f.sharedStreak > 0 && f.lastBoth !== today)
+  const atRisk = [
+    ...state.friends.filter((f) => f.sharedStreak > 0 && f.lastBoth !== today).map((f) => ({ id: f.id, name: f.name, avatar: f.avatar })),
+    ...social.friends
+      .filter((f) => { const s = sharedStreak(state.activeDays, f.active_days, today); return s.streak > 0 && !s.bothToday })
+      .map((f) => ({ id: f.id, name: f.name, avatar: initials(f.name) })),
+  ]
   const tier = flameTier(state.streak)
 
   // текущая неделя Пн–Вс
@@ -188,6 +199,16 @@ function Home({ state, track, openLesson, goFriends, update, toast }: {
           })}
         </div>
       </section>
+
+      {social.nudges.length > 0 && !doneToday && (
+        <button className="card nudge-banner" onClick={() => openLesson(nextLesson)}>
+          <span className="emoji">👉</span>
+          <div>
+            <b>{[...new Set(social.nudges.map((n) => n.from_name))].join(', ')} {social.nudges.length > 1 ? 'пнули' : 'пнул(а)'} тебя!</b>
+            <p className="muted small">Ваш общий огонёк ждёт. Пройди урок →</p>
+          </div>
+        </button>
+      )}
 
       {state.lostStreak > 0 && state.streak === 0 && (
         <section className="card repair">
@@ -251,22 +272,48 @@ function friendStatus(state: State, f: Friend, now: Date) {
   return { text: 'Позанимайтесь в один день, чтобы зажечь огонёк', cls: '' }
 }
 
-function Friends({ state, update, toast }: { state: State; update: (fn: (s: State) => State) => void; toast: (t: string) => void }) {
+const initials = (name: string) => name.trim().slice(0, 1).toUpperCase() || '?'
+
+function realStatus(me: State, f: Profile, today: string) {
+  const meToday = userActiveOn(me, today)
+  const them = f.active_days.includes(today)
+  const { streak, bothToday } = sharedStreak(me.activeDays, f.active_days, today)
+  if (bothToday) return { streak, bothToday, text: 'Оба позанимались сегодня ✓', cls: 'ok' }
+  if (meToday && !them) return { streak, bothToday, text: `Ждём ${f.name}…`, cls: 'wait' }
+  if (!meToday && them) return { streak, bothToday, text: `${f.name} уже позанимался(ась). Твоя очередь!`, cls: 'you' }
+  if (streak > 0) return { streak, bothToday, text: 'Никто ещё не занимался сегодня', cls: 'risk' }
+  return { streak, bothToday, text: 'Позанимайтесь в один день, чтобы зажечь огонёк', cls: '' }
+}
+
+function Friends({ state, social, update, toast }: { state: State; social: Social; update: (fn: (s: State) => State) => void; toast: (t: string) => void }) {
   const now = useNow(5_000)
   const today = dayKey(now)
   const sorted = [...state.friends].sort((a, b) => b.sharedStreak - a.sharedStreak)
   const [pending, setPending] = useState<string[]>([])
+  const [nudged, setNudged] = useState<string[]>([])
+  const [period, setPeriod] = useState<'today' | 'week'>('today')
 
-  const nudge = (f: Friend) => {
+  // симулированный друг (демо)
+  const nudgeDemo = (f: Friend) => {
     setPending((p) => [...p, f.id])
-    toast(`👉 ${f.name} получил(а) напоминание в Telegram`)
-    // симуляция: друг реагирует на «пинок» через несколько секунд
+    toast(`👉 ${f.name} получил(а) напоминание`)
     setTimeout(() => {
       update((s) => reconcile({ ...s, friends: s.friends.map((x) => (x.id === f.id ? { ...x, nudgedDay: dayKey() } : x)) }))
       setPending((p) => p.filter((id) => id !== f.id))
       toast(`🔥 ${f.name} зашёл(ла) и прошёл(ла) урок!`)
       haptic()
     }, 4000)
+  }
+  // реальный друг: «пинок» уходит на сервер, друг увидит его в приложении
+  const nudgeReal = async (f: Profile) => {
+    try {
+      await social.nudge(f.id)
+      setNudged((n) => [...n, f.id])
+      toast(`👉 ${f.name} увидит твой пинок в приложении`)
+      haptic()
+    } catch {
+      toast('Не получилось отправить, проверь интернет')
+    }
   }
   const restore = (f: Friend) => {
     update((s) => reconcile({
@@ -276,18 +323,32 @@ function Friends({ state, update, toast }: { state: State; update: (fn: (s: Stat
     }))
     toast(`🔥 Огонёк с ${f.name} восстановлен!`)
   }
+  const url = HAS_BACKEND ? inviteUrl() : `${location.origin}${location.pathname}`
+  const text = `${state.name} зовёт тебя учиться вместе в AkylFlow и держать общий огонёк 🔥`
   const invite = async () => {
-    const url = `${location.origin}${location.pathname}?ref=${encodeURIComponent(state.name || 'Друг')}`
-    const text = `Давай учиться вместе в AkylFlow и держать общий огонёк 🔥`
     if (tg?.openTelegramLink) return tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`)
     try {
       if (navigator.share) await navigator.share({ title: 'AkylFlow', text, url })
       else {
         await navigator.clipboard.writeText(url)
-        toast('🔗 Ссылка-приглашение скопирована')
+        toast('🔗 Ссылка скопирована, отправь её другу')
       }
     } catch { /* пользователь отменил */ }
   }
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url)
+      toast('🔗 Ссылка скопирована')
+    } catch {
+      toast('Скопируй ссылку вручную')
+    }
+  }
+
+  // рейтинг «кто сколько занимался»: я + реальные друзья
+  const meRow = { id: 'me', name: state.name, me: true, today: state.xpByDay[today] ?? 0, week: xpWeek({ xp_by_day: state.xpByDay }, today), streak: state.streak, active: userActiveOn(state, today) }
+  const rows = [meRow, ...social.friends.map((f) => ({ id: f.id, name: f.name, me: false, today: xpOn(f, today), week: xpWeek(f, today), streak: f.active_days.includes(today) || f.active_days.includes(addDays(today, -1)) ? f.streak : 0, active: f.active_days.includes(today) }))]
+    .sort((a, b) => b[period] - a[period])
+  const maxXp = Math.max(1, ...rows.map((r) => r[period]))
 
   return (
     <div className="screen">
@@ -300,6 +361,74 @@ function Friends({ state, update, toast }: { state: State; update: (fn: (s: Stat
         ))}
       </div>
 
+      {HAS_BACKEND && (
+        <section className="card invite">
+          <b>🤝 Позови друга по ссылке</b>
+          <p className="muted small">Друг откроет ссылку, и вы сразу появитесь друг у друга в списке: будете видеть, кто сколько занимался, и держать общий огонёк.</p>
+          <div className="link-row">
+            <input className="input link-input" readOnly value={url} onFocus={(e) => e.target.select()} />
+            <button className="btn small" onClick={copy}>Копировать</button>
+          </div>
+          <button className="btn wide" onClick={invite}>Отправить в Telegram</button>
+          {!social.online && <p className="warn-text small">Нет связи с сервером, данные обновятся позже</p>}
+        </section>
+      )}
+
+      {social.friends.length > 0 && (
+        <>
+          <div className="label-row">
+            <p className="label">Кто сколько занимался</p>
+            <div className="seg">
+              <button className={period === 'today' ? 'on' : ''} onClick={() => setPeriod('today')}>Сегодня</button>
+              <button className={period === 'week' ? 'on' : ''} onClick={() => setPeriod('week')}>Неделя</button>
+            </div>
+          </div>
+          <div className="board">
+            {rows.map((r, i) => (
+              <div key={r.id} className={`row lb ${r.me ? 'me' : ''}`}>
+                <span className="place">{i < 3 && r[period] > 0 ? ['🥇', '🥈', '🥉'][i] : i + 1}</span>
+                <div className="grow">
+                  <div className="lb-top">
+                    <span>{r.name}{r.me && ' (ты)'} {r.active ? '✅' : ''}</span>
+                    <b>{r[period]} XP</b>
+                  </div>
+                  <div className="lb-bar"><div style={{ width: `${(r[period] / maxXp) * 100}%` }} /></div>
+                  <span className="muted small">🔥 серия {r.streak} дн.</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <p className="label">Общие огоньки</p>
+          {social.friends.map((f) => {
+            const st = realStatus(state, f, today)
+            const tier = flameTier(st.streak)
+            const canNudge = !f.active_days.includes(today) && !nudged.includes(f.id)
+            return (
+              <div key={f.id} className={`friend ${st.cls}`}>
+                <div className="f-ava letter">{initials(f.name)}</div>
+                <div className="f-main">
+                  <b>{f.name}</b>
+                  <span className={`f-status ${st.cls}`}>{st.text}</span>
+                  <span className="muted small">Сегодня {xpOn(f, today)} XP · неделя {xpWeek(f, today)} XP</span>
+                  {tier.next && st.streak > 0 && <div className="f-next"><div style={{ width: `${(st.streak / tier.next) * 100}%` }} /></div>}
+                </div>
+                <div className="f-right">
+                  <div className={`f-flame ${st.bothToday ? tier.cls : st.streak > 0 ? tier.cls + ' faded' : 'tier-off'}`}>🔥<span>{st.streak}</span></div>
+                  {canNudge && <button className="chip" onClick={() => nudgeReal(f)}>👉 Пнуть</button>}
+                  {nudged.includes(f.id) && <span className="muted small">пнул ✓</span>}
+                </div>
+              </div>
+            )
+          })}
+        </>
+      )}
+
+      {HAS_BACKEND && social.friends.length === 0 && (
+        <p className="muted small center">Пока нет друзей. Отправь ссылку выше, и как только друг её откроет, он появится здесь.</p>
+      )}
+
+      {sorted.length > 0 && <p className="label">{HAS_BACKEND ? 'Демо-друзья' : 'Друзья'}</p>}
       {sorted.map((f) => {
         const st = friendStatus(state, f, now)
         const tier = flameTier(f.sharedStreak)
@@ -323,15 +452,14 @@ function Friends({ state, update, toast }: { state: State; update: (fn: (s: Stat
               <div className={`f-flame ${f.lastBoth === today ? tier.cls : f.sharedStreak > 0 ? tier.cls + ' faded' : 'tier-off'}`}>
                 🔥<span>{f.sharedStreak}</span>
               </div>
-              {canNudge && <button className="chip" onClick={() => nudge(f)}>👉 Пнуть</button>}
+              {canNudge && <button className="chip" onClick={() => nudgeDemo(f)}>👉 Пнуть</button>}
               {pending.includes(f.id) && <span className="muted small">отправлено…</span>}
             </div>
           </div>
         )
       })}
 
-      <button className="btn wide ghost" onClick={invite}>＋ Пригласить друга в Telegram</button>
-      <p className="muted small center">За каждого друга, который прошёл первый урок, ты получишь +50 🪙</p>
+      {!HAS_BACKEND && <button className="btn wide ghost" onClick={invite}>＋ Пригласить друга в Telegram</button>}
     </div>
   )
 }
@@ -480,7 +608,7 @@ function Profile({ state, update, reset, toast }: { state: State; update: (fn: (
 }
 
 /* ================= Празднование после урока ================= */
-function Celebration({ result, state, onClose }: { result: LessonResult; state: State; onClose: () => void }) {
+function Celebration({ result, realExt, state, onClose }: { result: LessonResult; realExt: { name: string; streak: number }[]; state: State; onClose: () => void }) {
   const tier = flameTier(result.newStreak)
   const milestone = [3, 7, 14, 30, 50, 100, 365].includes(result.newStreak)
   return (
@@ -503,8 +631,9 @@ function Celebration({ result, state, onClose }: { result: LessonResult; state: 
           <span>+{result.xpGained} XP</span>
           <span>+15 🪙</span>
         </div>
-        {result.friendsExtended.length > 0 && (
+        {(result.friendsExtended.length > 0 || realExt.length > 0) && (
           <div className="friend-ext">
+            {realExt.map((r) => <div key={'r' + r.name}>🔥 Огонёк с <b>{r.name}</b> теперь <b>{r.streak}</b> дн.</div>)}
             {result.friendsExtended.map((n) => {
               const f = state.friends.find((x) => x.name === n)
               return <div key={n}>🔥 Огонёк с <b>{n}</b> теперь <b>{f?.sharedStreak ?? ''}</b> дн.</div>

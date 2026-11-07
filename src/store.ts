@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { TrackId } from './content'
+import { HAS_BACKEND } from './config'
 
 /* ---------- даты (локальное время пользователя) ---------- */
 export const dayKey = (d = new Date()) => {
@@ -61,6 +62,13 @@ const mkFriend = (id: string, name: string, avatar: string, reliability: number,
   sharedStreak: 0, lastBoth: null, lostStreak: 0, nudgedDay: null,
 })
 
+const demoFriends = () => [
+  mkFriend('aigerim', 'Айгерим', '👩🏻', 90, 7),
+  mkFriend('bekzat', 'Бекзат', '🧑🏻', 75, 12),
+  mkFriend('zhyldyz', 'Жылдыз', '👩🏻‍🏫', 85, 18),
+  mkFriend('timur', 'Тимур', '🧑🏻‍💻', 60, 21),
+]
+
 const freshState = (): State => ({
   name: '',
   track: null,
@@ -77,12 +85,8 @@ const freshState = (): State => ({
   lostStreak: 0,
   freezes: 1,
   completed: [],
-  friends: [
-    mkFriend('aigerim', 'Айгерим', '👩🏻', 90, 7),
-    mkFriend('bekzat', 'Бекзат', '🧑🏻', 75, 12),
-    mkFriend('zhyldyz', 'Жылдыз', '👩🏻‍🏫', 85, 18),
-    mkFriend('timur', 'Тимур', '🧑🏻‍💻', 60, 21),
-  ],
+  // с сервером — только реальные друзья; без сервера — демо-друзья
+  friends: HAS_BACKEND ? [] : demoFriends(),
   lastSeenDay: dayKey(),
 })
 
@@ -205,7 +209,7 @@ export function demoState(name: string, track: TrackId): State {
     activeDays: active, frozenDays: frozen, xpByDay,
     streak: 13, longest: 21, lastActive: addDays(today, -1),
     completed: [],
-    friends: s.friends.map((f) => ({
+    friends: demoFriends().map((f) => ({
       ...f,
       sharedStreak: streaks[f.id],
       lastBoth: streaks[f.id] ? addDays(today, -1) : null,
